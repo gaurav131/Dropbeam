@@ -36,7 +36,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Validate signing credentials
+      - name: Check signing credentials
+        id: signing
         env:
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
@@ -47,12 +48,17 @@ jobs:
           missing=0
           for variable in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
             if [[ -z "${!variable}" ]]; then
-              echo "::error::${variable} is required for release builds"
               missing=1
             fi
           done
-          exit "$missing"
+          if [[ "$missing" -eq 0 ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Publishing a source-only release because Apple signing credentials are not configured"
+          fi
       - name: Build signed and notarized universal package
+        if: steps.signing.outputs.available == 'true'
         run: npm run package:mac
         env:
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
@@ -60,9 +66,18 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - run: npm run test:package
-      - run: npm run verify:release
+      - if: steps.signing.outputs.available == 'true'
+        run: npm run test:package
+      - if: steps.signing.outputs.available == 'true'
+        run: npm run verify:release
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/*.dmg release/*.zip --generate-notes --verify-tag
+          HAS_SIGNING_CREDENTIALS: ${{ steps.signing.outputs.available }}
+        run: |
+          if [[ "$HAS_SIGNING_CREDENTIALS" == "true" ]]; then
+            gh release create "$GITHUB_REF_NAME" release/*.dmg release/*.zip --generate-notes --verify-tag
+          else
+            gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag \
+              --notes "Source-only release. Signed and notarized macOS downloads will be attached after Apple signing credentials are configured."
+          fi

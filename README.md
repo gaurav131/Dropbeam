@@ -43,4 +43,4 @@ Distribution builds require these repository secrets:
 - `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password
 - `APPLE_TEAM_ID`: Apple Developer team ID
 
-Pushing a `v*` tag runs the signed and notarized GitHub Actions release job. Before an artifact is distributed, the job launches the packaged app smoke test and verifies its universal architecture, signature, Gatekeeper assessment, stapled notarization ticket, DMG checksum, and privacy metadata.
+Pushing a `v*` tag creates a GitHub release. Without Apple credentials it is source-only. When all signing secrets are configured, the job also launches the packaged app smoke test and verifies the universal architecture, signature, Gatekeeper assessment, stapled notarization ticket, DMG checksum, and privacy metadata before attaching the `.dmg` and `.zip` files.
