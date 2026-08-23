@@ -1,0 +1,75 @@
+{
+  "name": "dropbeam",
+  "productName": "Dropbeam",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Direct local network file sharing for macOS with no cloud upload.",
+  "author": "Dropbeam",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "tsc -b && electron-vite build",
+    "lint": "eslint .",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:package": "node scripts/smoke-packaged.mjs",
+    "preview": "electron-vite preview",
+    "package:mac": "npm run build && electron-builder --mac --universal",
+    "verify:release": "node scripts/verify-macos-release.mjs"
+  },
+  "build": {
+    "appId": "com.dropbeam.app",
+    "productName": "Dropbeam",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "afterPack": "./scripts/after-pack.cjs",
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": true,
+      "strictVerify": true,
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Dropbeam uses your local network to share files you select with nearby devices."
+      }
+    }
+  },
+  "dependencies": {
+    "lucide-react": "^1.33.0",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "eslint": "^10.8.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.7.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.65.0",
+    "vite": "^7.3.6"
+  }
+}

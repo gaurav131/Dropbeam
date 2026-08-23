@@ -1,0 +1,23 @@
+:root {
+  font-family: 'Avenir Next', Avenir, 'Helvetica Neue', sans-serif;
+  color: #1a2521;
+  background: #edf1e9;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body,
+#root {
+  min-width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body { min-height: 100vh; overflow: hidden; }
+button { font: inherit; }
+button:focus-visible { outline: 3px solid rgba(183, 58, 29, 0.82); outline-offset: 2px; }
