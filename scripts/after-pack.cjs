@@ -28,6 +28,10 @@ module.exports = async function afterPack(context) {
   ])
 
   for (const key of unnecessaryUsageDescriptions) {
-    execFileSync('/usr/bin/plutil', ['-remove', key, infoPlist])
+    try {
+      execFileSync('/usr/bin/plutil', ['-remove', key, infoPlist])
+    } catch (error) {
+      if (error.status !== 1) throw error
+    }
   }
 }

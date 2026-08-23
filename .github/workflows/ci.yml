@@ -5,6 +5,12 @@ on:
     branches: ['**']
     tags: ['v*']
   pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build or update
+        required: true
+        default: v0.1.0
 
 permissions:
   contents: read
@@ -24,9 +30,11 @@ jobs:
       - run: npm run build
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: quality
     runs-on: macos-14
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,7 +42,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Validate signing credentials
+      - name: Check signing credentials
+        id: signing
         env:
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
@@ -45,12 +54,17 @@ jobs:
           missing=0
           for variable in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
             if [[ -z "${!variable}" ]]; then
-              echo "::error::${variable} is required for release builds"
               missing=1
             fi
           done
-          exit "$missing"
+          if [[ "$missing" -eq 0 ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Publishing unsigned artifacts because Apple signing credentials are not configured"
+          fi
       - name: Build signed and notarized universal package
+        if: steps.signing.outputs.available == 'true'
         run: npm run package:mac
         env:
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
@@ -58,12 +72,51 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - run: npm run test:package
-      - run: npm run verify:release
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Dropbeam-${{ github.ref_name }}-macOS
-          path: |
-            release/*.dmg
-            release/*.zip
-          if-no-files-found: error
+      - name: Build unsigned universal package
+        if: steps.signing.outputs.available != 'true'
+        run: npm run package:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Smoke test packaged app
+        run: npm run test:package
+      - name: Verify signed release
+        if: steps.signing.outputs.available == 'true'
+        run: npm run verify:release
+      - name: Verify and label unsigned release
+        if: steps.signing.outputs.available != 'true'
+        run: |
+          hdiutil verify release/*.dmg
+          architectures="$(lipo -archs release/mac-universal/Dropbeam.app/Contents/MacOS/Dropbeam)"
+          [[ "$architectures" == *arm64* && "$architectures" == *x86_64* ]]
+          info_plist="release/mac-universal/Dropbeam.app/Contents/Info.plist"
+          [[ "$(plutil -extract NSAppTransportSecurity.NSAllowsArbitraryLoads raw "$info_plist")" == "false" ]]
+          for key in NSAudioCaptureUsageDescription NSBluetoothAlwaysUsageDescription \
+            NSBluetoothPeripheralUsageDescription NSCameraUsageDescription NSMicrophoneUsageDescription; do
+            if plutil -extract "$key" raw "$info_plist" >/dev/null 2>&1; then
+              echo "::error::Unexpected privacy usage description: $key"
+              exit 1
+            fi
+          done
+          for artifact in release/*.dmg release/*.zip; do
+            extension="${artifact##*.}"
+            mv "$artifact" "${artifact%.*}-unsigned.${extension}"
+          done
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_SIGNING_CREDENTIALS: ${{ steps.signing.outputs.available }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          artifacts=(release/*.dmg release/*.zip)
+          if [[ "$HAS_SIGNING_CREDENTIALS" == "true" ]]; then
+            release_notes="Signed and notarized universal macOS release."
+          else
+            release_notes="Unsigned universal macOS build. macOS Gatekeeper may require you to right-click Dropbeam and choose Open. Signed and notarized downloads will replace these files after Apple signing credentials are configured."
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${artifacts[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --notes "$release_notes"
+          else
+            gh release create "$RELEASE_TAG" "${artifacts[@]}" --title "$RELEASE_TAG" \
+              --notes "$release_notes" --verify-tag
+          fi

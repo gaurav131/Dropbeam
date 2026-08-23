@@ -18,7 +18,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "test:package": "node scripts/smoke-packaged.mjs",
     "preview": "electron-vite preview",
-    "package:mac": "npm run build && electron-builder --mac --universal",
+    "package:mac": "npm run build && electron-builder --mac --universal --publish never",
     "verify:release": "node scripts/verify-macos-release.mjs"
   },
   "build": {

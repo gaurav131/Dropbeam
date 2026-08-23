@@ -33,14 +33,4 @@ npm run build
 npm run package:mac
 ```
 
-Universal `.app`, `.dmg`, and `.zip` outputs are written to `release/`. Without Apple credentials, electron-builder creates a local unsigned build that must not be distributed.
-
-Distribution builds require these repository secrets:
-
-- `MAC_CSC_LINK`: exported Developer ID Application certificate (`.p12`) as a path, URL, or base64 value
-- `MAC_CSC_KEY_PASSWORD`: certificate password
-- `APPLE_ID`: Apple developer account email
-- `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password
-- `APPLE_TEAM_ID`: Apple Developer team ID
-
-Pushing a `v*` tag runs the signed and notarized GitHub Actions release job. Before an artifact is distributed, the job launches the packaged app smoke test and verifies its universal architecture, signature, Gatekeeper assessment, stapled notarization ticket, DMG checksum, and privacy metadata.
+Universal `.app`, `.dmg`, and `.zip` outputs are written to `release/`. 
