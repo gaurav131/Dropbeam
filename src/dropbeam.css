@@ -68,14 +68,18 @@ h2 { color: white; font-size: 31px; line-height: 1.08; font-weight: 650; }
 .icon-button svg, .copy-button svg { width: 15px; }
 .empty-list { min-height: 96px; display: flex; align-items: center; justify-content: center; gap: 9px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: #8a9690; font-size: 12px; }
 .empty-list svg { width: 16px; }
+.received-section { margin-top: 34px; }
+.received-heading { min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.received-heading h2 { color: var(--ink); font-size: 20px; line-height: 1.15; }
+.received-heading .eyebrow { margin-bottom: 4px; }
+.received-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.received-list li { animation-name: received-in; }
+@keyframes received-in { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: translateX(0); } }
 .share-pane { position: relative; padding: 48px clamp(30px, 4.5vw, 58px) 34px; overflow: auto; color: #d8e3de; background-color: var(--forest); background-image: linear-gradient(rgba(216, 236, 115, 0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(216, 236, 115, 0.045) 1px, transparent 1px); background-size: 32px 32px; }
 .share-pane::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 1px; background: rgba(255, 255, 255, 0.08); }
 .share-heading p { margin-top: 9px; color: #a8beb5; font-size: 13px; }
 .qr-frame { position: relative; width: min(100%, 276px); aspect-ratio: 1; display: grid; place-items: center; margin: 30px auto 24px; border: 1px solid rgba(216, 236, 115, 0.24); border-radius: 8px; background: white; box-shadow: 0 20px 44px rgba(4, 25, 20, 0.3); transition: opacity 180ms ease; }
 .qr-frame svg { width: 80%; height: 80%; }
-.qr-frame.is-idle svg { opacity: 0.18; }
-.qr-lock { position: absolute; width: 54px; height: 54px; display: grid; place-items: center; border-radius: 8px; color: var(--forest); background: var(--acid); box-shadow: 0 8px 18px rgba(16, 46, 41, 0.18); }
-.qr-lock svg { width: 22px; opacity: 1; }
 .qr-loading { width: 78%; height: 78%; background: repeating-linear-gradient(45deg, #edf1e9, #edf1e9 7px, #f8faf6 7px, #f8faf6 14px); }
 .link-box { width: min(100%, 330px); min-height: 58px; margin: 0 auto; padding: 10px 10px 10px 14px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 7px; background: rgba(6, 31, 25, 0.32); }
 .link-copy { min-width: 0; }

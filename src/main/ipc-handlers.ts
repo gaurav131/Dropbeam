@@ -19,10 +19,15 @@ type ClipboardAdapter = {
   writeText: (text: string) => void
 }
 
+type ShellAdapter = {
+  showItemInFolder: (path: string) => void
+}
+
 type RegisterIpcHandlersOptions = {
   ipc: IpcRegistrar
   dialog: DialogAdapter
   clipboard: ClipboardAdapter
+  shell: ShellAdapter
   getSession: () => ShareSession | undefined
   publishState: (state?: ShareState) => ShareState
   rendererUrl: string
@@ -58,6 +63,7 @@ export function registerIpcHandlers({
   ipc,
   dialog,
   clipboard,
+  shell,
   getSession,
   publishState,
   rendererUrl,
@@ -96,6 +102,26 @@ export function registerIpcHandlers({
   ipc.handle('files:clear', async (event) => {
     assertTrustedSender(event, rendererUrl)
     return publishState(await requireSession(getSession).clear())
+  })
+
+  ipc.handle('received:clear', async (event) => {
+    assertTrustedSender(event, rendererUrl)
+    return publishState(await requireSession(getSession).clearReceived())
+  })
+
+  ipc.handle('received:reveal', (event, id: unknown) => {
+    assertTrustedSender(event, rendererUrl)
+    if (typeof id !== 'string') throw new TypeError('Received file id must be a string.')
+    const path = requireSession(getSession).getReceivedPath(id)
+    if (!path) return false
+    shell.showItemInFolder(path)
+    return true
+  })
+
+  ipc.handle('received:set-enabled', async (event, enabled: unknown) => {
+    assertTrustedSender(event, rendererUrl)
+    if (typeof enabled !== 'boolean') throw new TypeError('Receiving state must be a boolean.')
+    return publishState(await requireSession(getSession).setReceivingEnabled(enabled))
   })
 
   ipc.handle('share:get-state', (event) => {

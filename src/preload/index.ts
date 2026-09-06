@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('dropbeam', {
     ),
   removeFile: (id: string) => ipcRenderer.invoke('files:remove', id),
   clearFiles: () => ipcRenderer.invoke('files:clear'),
+  clearReceivedFiles: () => ipcRenderer.invoke('received:clear'),
+  revealReceivedFile: (id: string) => ipcRenderer.invoke('received:reveal', id),
+  setReceivingEnabled: (enabled: boolean) => ipcRenderer.invoke('received:set-enabled', enabled),
   getState: () => ipcRenderer.invoke('share:get-state'),
   copyLink: () => ipcRenderer.invoke('share:copy-link'),
   onStateChanged: (listener: (state: ShareState) => void) => {

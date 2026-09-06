@@ -6,6 +6,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  shell,
 } from 'electron'
 import { registerIpcHandlers, type IpcRegistrar } from './ipc-handlers.js'
 import { startShareServer, type ShareServer } from './share-server.js'
@@ -20,14 +21,23 @@ let isClosingServer = false
 
 function getShareState(): ShareState {
   if (!shareSession) {
-    return { files: [], share: { url: '', address: '', port: 0 } }
+    return {
+      files: [],
+      receivedFiles: [],
+      receivingEnabled: false,
+      share: { url: '', address: '', port: 0 },
+    }
   }
   return shareSession.getState()
 }
 
 function publishShareState(state = getShareState()): ShareState {
   for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send('share:state-changed', state)
+    try {
+      window.webContents.send('share:state-changed', state)
+    } catch (error) {
+      console.warn('Dropbeam could not update a renderer window.', error)
+    }
   }
   return state
 }
@@ -89,7 +99,14 @@ async function runPackagedSmokeTest(
 }
 
 void app.whenReady().then(async () => {
-  shareServer = await startShareServer(() => shareSession?.getRecords() ?? [])
+  shareServer = await startShareServer(() => shareSession?.getRecords() ?? [], {
+    uploadDirectory: join(app.getPath('downloads'), 'Dropbeam'),
+    isUploadEnabled: () => shareSession?.isReceivingEnabled() ?? false,
+    onUpload: async (file) => {
+      if (!shareSession) throw new Error('Sharing is not ready yet.')
+      publishShareState(await shareSession.recordReceived(file))
+    },
+  })
   shareSession = new ShareSession(shareServer)
   const rendererFile = join(__dirname, '../renderer/index.html')
   const rendererUrl = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(rendererFile).href
@@ -97,6 +114,7 @@ void app.whenReady().then(async () => {
     ipc: ipcMain as IpcRegistrar,
     dialog,
     clipboard,
+    shell,
     getSession: () => shareSession,
     publishState: publishShareState,
     rendererUrl,
@@ -127,7 +145,11 @@ void app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  if (shareSession) void shareSession.clear().then(publishShareState)
+  if (shareSession) {
+    void shareSession.clear()
+      .then(() => shareSession?.refreshAddress())
+      .then((state) => state && publishShareState(state))
+  }
   if (process.platform !== 'darwin') app.quit()
 })
 

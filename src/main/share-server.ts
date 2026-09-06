@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { mkdir, open, rm, statfs } from 'node:fs/promises'
 import { createServer, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
-import { extname } from 'node:path'
+import { extname, join, parse } from 'node:path'
 import type { SharedFile, ShareInfo } from '../shared/contracts.js'
 
 export type SharedFileRecord = {
@@ -20,6 +20,25 @@ export type ShareServer = {
 }
 
 const MAX_CONCURRENT_DOWNLOADS = 8
+const MAX_CONCURRENT_UPLOADS = 4
+export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+export const MAX_SESSION_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024
+const MIN_FREE_DISK_BYTES = 512 * 1024 * 1024
+
+export type ReceivedFileRecord = {
+  path: string
+  name: string
+  size: number
+  receivedAt: string
+}
+
+type ShareServerOptions = {
+  uploadDirectory?: string
+  onUpload?: (file: ReceivedFileRecord) => void | Promise<void>
+  isUploadEnabled?: () => boolean
+  maxSessionUploadBytes?: number
+  minFreeDiskBytes?: number
+}
 
 const mimeTypes: Record<string, string> = {
   '.csv': 'text/csv; charset=utf-8',
@@ -90,7 +109,12 @@ function formatBytes(bytes: number): string {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`
 }
 
-function renderDownloadPage(token: string, files: SharedFileRecord[]): string {
+function renderDownloadPage(
+  token: string,
+  files: SharedFileRecord[],
+  uploadsEnabled: boolean,
+  scriptNonce: string,
+): string {
   const totalSize = files.reduce((sum, { file }) => sum + file.size, 0)
   const fileRows = files.length
     ? files
@@ -107,6 +131,66 @@ function renderDownloadPage(token: string, files: SharedFileRecord[]): string {
         )
         .join('')
     : '<li class="empty">No files are currently available.</li>'
+
+  const uploadPanel = uploadsEnabled
+    ? `<section class="upload-panel">
+      <div><h2>Send files to this Mac</h2><p>Choose files from this device. They save directly to the Mac.</p></div>
+      <div class="upload-actions">
+        <label class="upload-action photo-action" for="photo-input">
+          <span>Choose photos</span>
+          <input class="upload-input" id="photo-input" type="file" accept="image/*" multiple>
+        </label>
+        <label class="upload-action" for="file-input">
+          <span>Choose files</span>
+          <input class="upload-input" id="file-input" type="file" multiple>
+        </label>
+      </div>
+      <p id="upload-status" class="upload-status" role="status" aria-live="polite"></p>
+    </section>`
+    : ''
+  const uploadScript = uploadsEnabled
+    ? `<script nonce="${scriptNonce}">
+      const inputs = Array.from(document.querySelectorAll('.upload-input'));
+      const status = document.getElementById('upload-status');
+      const setInputsDisabled = (disabled) => {
+        inputs.forEach((item) => {
+          item.disabled = disabled;
+          const action = item.closest('.upload-action');
+          action.classList.toggle('is-disabled', disabled);
+          action.setAttribute('aria-disabled', String(disabled));
+        });
+      };
+      const uploadSelected = async (input) => {
+        const files = Array.from(input.files || []);
+        if (!files.length) return;
+        setInputsDisabled(true);
+        let sent = 0;
+        for (const file of files) {
+          status.textContent = 'Sending ' + file.name + ' (' + (sent + 1) + ' of ' + files.length + ')...';
+          try {
+            const response = await fetch('/${token}/upload?name=' + encodeURIComponent(file.name), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/octet-stream' },
+              body: file,
+            });
+            if (!response.ok) throw new Error(await response.text() || 'Upload failed');
+            sent += 1;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Upload failed';
+            status.textContent = 'Could not send ' + file.name + ': ' + message;
+            setInputsDisabled(false);
+            return;
+          }
+        }
+        status.textContent = sent + (sent === 1 ? ' file sent.' : ' files sent.');
+        input.value = '';
+        setInputsDisabled(false);
+      };
+      inputs.forEach((input) => {
+        input.addEventListener('change', () => uploadSelected(input));
+      });
+    </script>`
+    : ''
 
   return `<!doctype html>
 <html lang="en">
@@ -136,22 +220,73 @@ function renderDownloadPage(token: string, files: SharedFileRecord[]): string {
     small { margin-top: 4px; color: #7c8882; font-size: 12px; }
     a { min-height: 44px; display: inline-flex; align-items: center; padding: 9px 13px; border-radius: 6px; color: white; background: #e35635; font-size: 12px; font-weight: 700; text-decoration: none; }
     .empty { display: block; padding: 32px 20px; color: #7c8882; text-align: center; }
+    .upload-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 18px; margin-top: 18px; padding: 20px; border: 1px solid #d7ddd3; border-radius: 8px; background: white; }
+    .upload-panel h2 { margin: 0; color: #17211e; font-size: 18px; }
+    .upload-panel p { margin: 4px 0 0; color: #7c8882; font-size: 13px; }
+    .upload-actions { display: flex; align-items: center; gap: 8px; }
+    .upload-action { position: relative; min-height: 44px; display: inline-flex; align-items: center; padding: 9px 15px; border-radius: 6px; color: #163c35; background: #d8ec73; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .upload-action.photo-action { color: white; background: #e35635; }
+    .upload-action:focus-within { outline: 3px solid #163c35; outline-offset: 3px; }
+    .upload-action.is-disabled { opacity: .55; cursor: wait; pointer-events: none; }
+    .upload-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .upload-status { grid-column: 1 / -1; min-height: 18px; color: #315e50 !important; font-weight: 600; }
     footer { padding: 24px 0; color: #7c8882; font-size: 12px; text-align: center; }
+    @media (max-width: 520px) { .upload-panel { grid-template-columns: 1fr; } .upload-actions { display: grid; grid-template-columns: 1fr 1fr; } .upload-action { justify-content: center; } }
   </style>
 </head>
 <body>
   <header><div class="wrap">
     <div class="brand"><span class="brand-mark">DB</span> Dropbeam</div>
-    <h1>Files from a nearby Mac.</h1>
-    <p>Tap a file below to save it to this device.</p>
+    <h1>Share files nearby.</h1>
+    <p>Download from this Mac or send files back to it.</p>
   </div></header>
   <main>
     <div class="summary" role="region" aria-label="File summary"><span>${files.length} ${files.length === 1 ? 'file' : 'files'}</span><span>${formatBytes(totalSize)}</span></div>
     <ul>${fileRows}</ul>
+    ${uploadPanel}
     <footer>No cloud upload. Use this link only on a trusted local network.</footer>
   </main>
+  ${uploadScript}
 </body>
 </html>`
+}
+
+function sanitizeUploadName(value: string): string | undefined {
+  const withoutControls = [...value]
+    .filter((character) => {
+      const code = character.charCodeAt(0)
+      return code >= 32 && code !== 127
+    })
+    .join('')
+  const cleaned = withoutControls
+    .replace(/[\\/]/g, '-')
+    .trim()
+  let name = ''
+  for (const character of cleaned) {
+    if (Buffer.byteLength(name + character) > 200) break
+    name += character
+  }
+  return name && name !== '.' && name !== '..' ? name : undefined
+}
+
+async function createUploadTarget(
+  directory: string,
+  requestedName: string,
+): Promise<{ fileHandle: Awaited<ReturnType<typeof open>>; path: string; name: string }> {
+  await mkdir(directory, { recursive: true })
+  const { name, ext } = parse(requestedName)
+
+  for (let index = 0; index < 10_000; index += 1) {
+    const fileName = index === 0 ? requestedName : `${name} (${index})${ext}`
+    const path = join(directory, fileName)
+    try {
+      return { fileHandle: await open(path, 'wx'), path, name: fileName }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+  }
+
+  throw new Error('Could not create a unique file name.')
 }
 
 function sendHeaders(response: ServerResponse, status: number, headers: Record<string, string>): void {
@@ -165,9 +300,13 @@ function sendHeaders(response: ServerResponse, status: number, headers: Record<s
 
 export async function startShareServer(
   getFiles: () => SharedFileRecord[],
+  options: ShareServerOptions = {},
 ): Promise<ShareServer> {
   let token = randomBytes(18).toString('base64url')
   let activeDownloads = 0
+  let activeUploads = 0
+  let completedUploadBytes = 0
+  let reservedUploadBytes = 0
   const server = createServer(async (request, response) => {
     const method = request.method ?? 'GET'
     let requestUrl: URL
@@ -180,15 +319,121 @@ export async function startShareServer(
     }
     const pagePath = `/${token}`
     const files = getFiles()
+    const uploadsEnabled = Boolean(options.uploadDirectory) && (options.isUploadEnabled?.() ?? true)
 
     if ((method === 'GET' || method === 'HEAD') && (requestUrl.pathname === pagePath || requestUrl.pathname === `${pagePath}/`)) {
-      const body = renderDownloadPage(token, files)
+      const scriptNonce = randomBytes(18).toString('base64url')
+      const body = renderDownloadPage(token, files, uploadsEnabled, scriptNonce)
       sendHeaders(response, 200, {
         'Content-Length': String(Buffer.byteLength(body)),
         'Content-Type': 'text/html; charset=utf-8',
-        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+        'Content-Security-Policy': `default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${scriptNonce}'`,
       })
       response.end(method === 'HEAD' ? undefined : body)
+      return
+    }
+
+    if (method === 'POST' && requestUrl.pathname === `${pagePath}/upload` && options.uploadDirectory) {
+      if (!uploadsEnabled) {
+        sendHeaders(response, 403, { 'Content-Type': 'text/plain; charset=utf-8' })
+        response.end('Receiving is paused on this Mac.')
+        return
+      }
+
+      const requestedName = sanitizeUploadName(requestUrl.searchParams.get('name') ?? '')
+      const contentLength = Number(request.headers['content-length'])
+
+      if (!requestedName) {
+        sendHeaders(response, 400, { 'Content-Type': 'text/plain; charset=utf-8' })
+        response.end('A valid file name is required.')
+        return
+      }
+      if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+        sendHeaders(response, 411, { 'Content-Type': 'text/plain; charset=utf-8' })
+        response.end('A valid Content-Length header is required.')
+        return
+      }
+      if (contentLength > MAX_UPLOAD_BYTES) {
+        sendHeaders(response, 413, { 'Content-Type': 'text/plain; charset=utf-8' })
+        response.end(`Files must be ${formatBytes(MAX_UPLOAD_BYTES)} or smaller.`)
+        return
+      }
+      const sessionUploadLimit = options.maxSessionUploadBytes ?? MAX_SESSION_UPLOAD_BYTES
+      if (completedUploadBytes + reservedUploadBytes + contentLength > sessionUploadLimit) {
+        sendHeaders(response, 413, { 'Content-Type': 'text/plain; charset=utf-8' })
+        response.end('This receiving session has reached its upload limit.')
+        return
+      }
+      if (activeUploads >= MAX_CONCURRENT_UPLOADS) {
+        sendHeaders(response, 429, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Retry-After': '2',
+        })
+        response.end('Too many simultaneous uploads.')
+        return
+      }
+
+      activeUploads += 1
+      reservedUploadBytes += contentLength
+      let target: Awaited<ReturnType<typeof createUploadTarget>> | undefined
+      try {
+        await mkdir(options.uploadDirectory, { recursive: true })
+        const fileSystem = await statfs(options.uploadDirectory)
+        const availableBytes = fileSystem.bavail * fileSystem.bsize
+        const minimumFreeBytes = options.minFreeDiskBytes ?? MIN_FREE_DISK_BYTES
+        if (availableBytes < reservedUploadBytes + minimumFreeBytes) {
+          sendHeaders(response, 507, { 'Content-Type': 'text/plain; charset=utf-8' })
+          response.end('There is not enough free disk space to receive this file.')
+          return
+        }
+
+        target = await createUploadTarget(options.uploadDirectory, requestedName)
+        let receivedBytes = 0
+        for await (const chunk of request) {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+          receivedBytes += buffer.length
+          if (receivedBytes > contentLength || receivedBytes > MAX_UPLOAD_BYTES) {
+            throw new Error('Upload exceeded its declared size.')
+          }
+          let offset = 0
+          while (offset < buffer.length) {
+            const { bytesWritten } = await target.fileHandle.write(
+              buffer,
+              offset,
+              buffer.length - offset,
+            )
+            if (bytesWritten === 0) throw new Error('Upload could not be written.')
+            offset += bytesWritten
+          }
+        }
+        if (receivedBytes !== contentLength) throw new Error('Upload was incomplete.')
+        await target.fileHandle.close()
+        completedUploadBytes += receivedBytes
+
+        const receivedFile: ReceivedFileRecord = {
+          path: target.path,
+          name: target.name,
+          size: receivedBytes,
+          receivedAt: new Date().toISOString(),
+        }
+        try {
+          await options.onUpload?.(receivedFile)
+        } catch (error) {
+          console.error('Dropbeam saved an upload but could not publish it.', error)
+        }
+        sendHeaders(response, 201, { 'Content-Type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify({ name: receivedFile.name, size: receivedFile.size }))
+      } catch {
+        await target?.fileHandle.close().catch(() => undefined)
+        if (target) await rm(target.path, { force: true }).catch(() => undefined)
+        if (!response.headersSent) {
+          sendHeaders(response, 400, { 'Content-Type': 'text/plain; charset=utf-8' })
+          response.end('The upload could not be saved.')
+        }
+      } finally {
+        activeUploads -= 1
+        reservedUploadBytes -= contentLength
+      }
       return
     }
 
@@ -302,7 +547,7 @@ export async function startShareServer(
   })
 
   server.headersTimeout = 10_000
-  server.requestTimeout = 30_000
+  server.requestTimeout = 15 * 60_000
   server.keepAliveTimeout = 5_000
   server.maxConnections = 32
 

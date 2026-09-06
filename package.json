@@ -2,8 +2,8 @@
   "name": "dropbeam",
   "productName": "Dropbeam",
   "private": true,
-  "version": "0.1.0",
-  "description": "Direct local network file sharing for macOS with no cloud upload.",
+  "version": "0.2.0",
+  "description": "Bidirectional local network file sharing for macOS with no cloud upload.",
   "author": "Dropbeam",
   "license": "MIT",
   "engines": {

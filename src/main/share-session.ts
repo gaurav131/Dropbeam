@@ -1,17 +1,24 @@
 import { randomUUID } from 'node:crypto'
 import { lstat } from 'node:fs/promises'
 import { parse } from 'node:path'
-import type { ShareState, SharedFile } from '../shared/contracts.js'
-import type { SharedFileRecord, ShareServer } from './share-server.js'
+import type { ReceivedFile, ShareState, SharedFile } from '../shared/contracts.js'
+import type { ReceivedFileRecord, SharedFileRecord, ShareServer } from './share-server.js'
 
 const DEFAULT_MAX_FILES = 200
 const STAT_BATCH_SIZE = 16
 
+type ReceivedRecord = {
+  path: string
+  file: ReceivedFile
+}
+
 export class ShareSession {
   readonly #records = new Map<string, SharedFileRecord>()
+  readonly #receivedRecords = new Map<string, ReceivedRecord>()
   readonly #server: Pick<ShareServer, 'getInfo' | 'rotateToken'>
   readonly #maxFiles: number
   #mutationQueue: Promise<void> = Promise.resolve()
+  #receivingEnabled = true
 
   constructor(
     server: Pick<ShareServer, 'getInfo' | 'rotateToken'>,
@@ -27,11 +34,57 @@ export class ShareSession {
 
   getState(): ShareState {
     const files = this.getRecords().map(({ file }) => file)
-    const share = this.#server.getInfo()
     return {
       files,
-      share: files.length > 0 ? share : { ...share, url: '' },
+      receivedFiles: [...this.#receivedRecords.values()].map(({ file }) => file),
+      receivingEnabled: this.#receivingEnabled,
+      share: files.length > 0 || this.#receivingEnabled
+        ? this.#server.getInfo()
+        : { ...this.#server.getInfo(), url: '' },
     }
+  }
+
+  isReceivingEnabled(): boolean {
+    return this.#receivingEnabled
+  }
+
+  setReceivingEnabled(enabled: boolean): Promise<ShareState> {
+    return this.#mutate(() => {
+      if (enabled === this.#receivingEnabled) return this.getState()
+      this.#receivingEnabled = enabled
+      this.#server.rotateToken()
+      return this.getState()
+    })
+  }
+
+  recordReceived(record: ReceivedFileRecord): Promise<ShareState> {
+    return this.#mutate(() => {
+      const pathParts = parse(record.name)
+      const file: ReceivedFile = {
+        id: randomUUID(),
+        name: record.name,
+        extension: pathParts.ext.slice(1).toLowerCase(),
+        size: record.size,
+        receivedAt: record.receivedAt,
+      }
+      this.#receivedRecords.set(file.id, { path: record.path, file })
+      while (this.#receivedRecords.size > this.#maxFiles) {
+        const oldestId = this.#receivedRecords.keys().next().value
+        if (typeof oldestId === 'string') this.#receivedRecords.delete(oldestId)
+      }
+      return this.getState()
+    })
+  }
+
+  getReceivedPath(id: string): string | undefined {
+    return this.#receivedRecords.get(id)?.path
+  }
+
+  clearReceived(): Promise<ShareState> {
+    return this.#mutate(() => {
+      this.#receivedRecords.clear()
+      return this.getState()
+    })
   }
 
   addPaths(paths: string[]): Promise<ShareState> {
@@ -104,7 +157,7 @@ export class ShareSession {
 
   refreshAddress(): Promise<ShareState> {
     return this.#mutate(() => {
-      if (this.#records.size > 0) this.#server.rotateToken()
+      this.#server.rotateToken()
       return this.getState()
     })
   }

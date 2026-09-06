@@ -38,6 +38,7 @@ test('IPC handlers select, hydrate, copy, and revoke a share', async () => {
   await writeFile(filePath, 'shared')
   const handlers = new Map<string, IpcHandler>()
   const copied: string[] = []
+  const revealed: string[] = []
   const published: ShareState[] = []
   const session = createSession()
   const ipc: IpcRegistrar = {
@@ -52,6 +53,7 @@ test('IPC handlers select, hydrate, copy, and revoke a share', async () => {
       showOpenDialog: async () => ({ canceled: false, filePaths: [filePath] }),
     },
     clipboard: { writeText: (text) => copied.push(text) },
+    shell: { showItemInFolder: (path) => revealed.push(path) },
     getSession: () => session,
     publishState: (state = session.getState()) => {
       published.push(state)
@@ -72,11 +74,27 @@ test('IPC handlers select, hydrate, copy, and revoke a share', async () => {
     assert.equal(handlers.get('share:copy-link')?.(trustedEvent), true)
     assert.deepEqual(copied, [selectState.share.url])
 
+    const receivedState = await session.recordReceived({
+      path: join(directory, 'received.txt'),
+      name: 'received.txt',
+      size: 12,
+      receivedAt: new Date().toISOString(),
+    })
+    const receivedId = receivedState.receivedFiles[0].id
+    assert.equal(handlers.get('received:reveal')?.(trustedEvent, receivedId), true)
+    assert.deepEqual(revealed, [join(directory, 'received.txt')])
+    assert.equal(handlers.get('received:reveal')?.(trustedEvent, 'missing'), false)
+    const clearedReceivedState = await handlers.get('received:clear')?.(trustedEvent) as ShareState
+    assert.deepEqual(clearedReceivedState.receivedFiles, [])
+
+    const pausedState = await handlers.get('received:set-enabled')?.(trustedEvent, false) as ShareState
+    assert.equal(pausedState.receivingEnabled, false)
+
     const clearState = await handlers.get('files:clear')?.(trustedEvent) as ShareState
     assert.equal(clearState.files.length, 0)
     assert.equal(clearState.share.url, '')
     assert.equal(handlers.get('share:copy-link')?.(trustedEvent), false)
-    assert.equal(published.length, 2)
+    assert.equal(published.length, 4)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -93,6 +111,7 @@ test('IPC handlers reject untrusted senders and malformed dropped paths', async 
       showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
     },
     clipboard: { writeText: () => undefined },
+    shell: { showItemInFolder: () => undefined },
     getSession: () => session,
     publishState: (state = session.getState()) => state,
     rendererUrl: trustedEvent.senderFrame?.url ?? '',
@@ -110,5 +129,9 @@ test('IPC handlers reject untrusted senders and malformed dropped paths', async 
       handlers.get('files:add-paths')?.(trustedEvent, ['valid', 42]),
     ),
     /array of paths/,
+  )
+  await assert.rejects(
+    Promise.resolve(handlers.get('received:set-enabled')?.(trustedEvent, 'yes')),
+    /must be a boolean/,
   )
 })

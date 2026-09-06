@@ -6,9 +6,11 @@ import {
   Copy,
   File,
   FileText,
+  FolderOpen,
   Image,
-  Link,
+  Inbox,
   Music,
+  PauseCircle,
   Plus,
   Radio,
   Trash2,
@@ -22,6 +24,8 @@ import './dropbeam.css'
 
 const emptyState: ShareState = {
   files: [],
+  receivedFiles: [],
+  receivingEnabled: false,
   share: { url: '', address: '', port: 0 },
 }
 
@@ -69,18 +73,28 @@ function App() {
   const [copied, setCopied] = useState(false)
   const [status, setStatus] = useState<{ kind: 'error' | 'success'; message: string } | null>(null)
   const copyTimer = useRef<number | undefined>(undefined)
+  const latestReceivedId = useRef<string | undefined>(undefined)
 
   useEffect(() => {
     let isMounted = true
     void window.dropbeam.getState()
       .then((state) => {
-        if (isMounted) setShareState(state)
+        if (isMounted) {
+          setShareState(state)
+          latestReceivedId.current = state.receivedFiles[state.receivedFiles.length - 1]?.id
+        }
       })
       .catch((error: unknown) => {
         if (isMounted) setStatus({ kind: 'error', message: getErrorMessage(error) })
       })
     const unsubscribe = window.dropbeam.onStateChanged((state) => {
-      if (isMounted) setShareState(state)
+      if (!isMounted) return
+      setShareState(state)
+      const latest = state.receivedFiles[state.receivedFiles.length - 1]
+      if (latest && latest.id !== latestReceivedId.current) {
+        setStatus({ kind: 'success', message: `${latest.name} received in Downloads/Dropbeam.` })
+      }
+      latestReceivedId.current = latest?.id
     })
     return () => {
       isMounted = false
@@ -89,7 +103,7 @@ function App() {
     }
   }, [])
 
-  const { files, share: shareInfo } = shareState
+  const { files, receivedFiles, receivingEnabled, share: shareInfo } = shareState
 
   const addSelectedFiles = async () => {
     setIsAdding(true)
@@ -121,9 +135,9 @@ function App() {
     setStatus(null)
     try {
       const didCopy = await window.dropbeam.copyLink()
-      if (!didCopy) throw new Error('Add at least one file before copying the link.')
+      if (!didCopy) throw new Error('The share link is not ready yet.')
       setCopied(true)
-      setStatus({ kind: 'success', message: 'Download link copied.' })
+      setStatus({ kind: 'success', message: 'Share link copied.' })
       if (copyTimer.current !== undefined) window.clearTimeout(copyTimer.current)
       copyTimer.current = window.setTimeout(() => {
         setCopied(false)
@@ -138,7 +152,7 @@ function App() {
     setStatus(null)
     try {
       setShareState(await window.dropbeam.clearFiles())
-      setStatus({ kind: 'success', message: 'Sharing stopped. The previous link no longer works.' })
+      setStatus({ kind: 'success', message: 'Files removed from the share.' })
     } catch (error) {
       setStatus({ kind: 'error', message: getErrorMessage(error) })
     }
@@ -148,6 +162,41 @@ function App() {
     setStatus(null)
     try {
       setShareState(await window.dropbeam.removeFile(id))
+    } catch (error) {
+      setStatus({ kind: 'error', message: getErrorMessage(error) })
+    }
+  }
+
+  const revealReceivedFile = async (id: string) => {
+    setStatus(null)
+    try {
+      const didReveal = await window.dropbeam.revealReceivedFile(id)
+      if (!didReveal) throw new Error('That received file is no longer available.')
+    } catch (error) {
+      setStatus({ kind: 'error', message: getErrorMessage(error) })
+    }
+  }
+
+  const clearReceivedFiles = async () => {
+    setStatus(null)
+    try {
+      setShareState(await window.dropbeam.clearReceivedFiles())
+    } catch (error) {
+      setStatus({ kind: 'error', message: getErrorMessage(error) })
+    }
+  }
+
+  const toggleReceiving = async () => {
+    setStatus(null)
+    try {
+      const state = await window.dropbeam.setReceivingEnabled(!receivingEnabled)
+      setShareState(state)
+      setStatus({
+        kind: 'success',
+        message: state.receivingEnabled
+          ? 'Receiving started with a new share link.'
+          : 'Receiving paused. The previous link no longer accepts uploads.',
+      })
     } catch (error) {
       setStatus({ kind: 'error', message: getErrorMessage(error) })
     }
@@ -190,7 +239,7 @@ function App() {
           <div className="pane-heading">
             <div>
               <span className="eyebrow">Ready to beam</span>
-              <h1 id="files-title">Your files</h1>
+              <h1 id="files-title">Files to send</h1>
             </div>
             {files.length > 0 && (
               <button className="text-button danger" type="button" onClick={stopSharing}>
@@ -239,22 +288,71 @@ function App() {
               </ul>
             )}
           </div>
+
+          <section className="received-section" aria-labelledby="received-title">
+            <div className="received-heading">
+              <div>
+                <span className="eyebrow">Saved to Downloads/Dropbeam</span>
+                <h2 id="received-title">Received on this Mac</h2>
+              </div>
+              <div className="received-actions">
+                <button className="text-button" type="button" onClick={toggleReceiving}>
+                  {receivingEnabled ? <PauseCircle aria-hidden="true" /> : <Radio aria-hidden="true" />}
+                  {receivingEnabled ? 'Pause receiving' : 'Start receiving'}
+                </button>
+                {receivedFiles.length > 0 && (
+                  <button className="text-button" type="button" onClick={clearReceivedFiles}>
+                    <Trash2 aria-hidden="true" /> Clear history
+                  </button>
+                )}
+              </div>
+            </div>
+            {receivedFiles.length === 0 ? (
+              <div className="empty-list"><Inbox aria-hidden="true" /><p>Files sent from nearby devices will appear here.</p></div>
+            ) : (
+              <ul className="file-list received-list">
+                {[...receivedFiles].reverse().map((file) => (
+                  <li key={file.id}>
+                    <span className={`file-icon type-${file.extension || 'other'}`}>
+                      <FileTypeIcon extension={file.extension} />
+                    </span>
+                    <span className="file-details">
+                      <strong title={file.name}>{file.name}</strong>
+                      <small>{formatBytes(file.size)} / {new Date(file.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small>
+                    </span>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      title={`Show ${file.name} in Finder`}
+                      aria-label={`Show ${file.name} in Finder`}
+                      onClick={() => void revealReceivedFile(file.id)}
+                    >
+                      <FolderOpen aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </section>
 
         <aside className="share-pane" aria-labelledby="share-title">
           <div className="share-heading">
             <span className="eyebrow light">Nearby sharing</span>
-            <h2 id="share-title">Scan to download</h2>
-            <p>{files.length > 0 ? `${files.length} ${files.length === 1 ? 'file is' : 'files are'} ready.` : 'Add files to start sharing.'}</p>
+            <h2 id="share-title">Scan to share</h2>
+            <p>{files.length > 0
+              ? `Download ${files.length} ${files.length === 1 ? 'file' : 'files'}${receivingEnabled ? ' or send files back' : ''}.`
+              : receivingEnabled
+                ? 'Ready to receive files from a nearby device.'
+                : 'Sharing is paused.'}</p>
           </div>
 
-          <div className={`qr-frame${files.length === 0 ? ' is-idle' : ''}`}>
+          <div className="qr-frame">
             {shareInfo.url ? (
               <QRCodeSVG value={shareInfo.url} size={220} level="M" marginSize={3} bgColor="#ffffff" fgColor="#173c35" title="Dropbeam download link" />
             ) : (
               <div className="qr-loading" />
             )}
-            {files.length === 0 && <span className="qr-lock"><Link aria-hidden="true" /></span>}
           </div>
 
           <div className="link-box">
@@ -262,14 +360,14 @@ function App() {
               <small>Share address</small>
               <strong>{shareInfo.address ? `${shareInfo.address}:${shareInfo.port}` : 'Starting server...'}</strong>
             </span>
-            <button className="copy-button" type="button" title="Copy download link" aria-label="Copy download link" disabled={!shareInfo.url} onClick={copyLink}>
+            <button className="copy-button" type="button" title="Copy share link" aria-label="Copy share link" disabled={!shareInfo.url} onClick={copyLink}>
               {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
             </button>
           </div>
 
           <div className="privacy-note">
             <span><Radio aria-hidden="true" /></span>
-            <p><strong>Direct, with no cloud upload</strong>Files travel over your local network. Use Dropbeam only on Wi-Fi you trust.</p>
+            <p><strong>Direct, with no cloud upload</strong>{receivingEnabled ? 'Receiving is active. ' : ''}Files travel over your local network. Use Dropbeam only on Wi-Fi you trust.</p>
           </div>
         </aside>
       </main>
