@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ShareState } from '../shared/contracts.js'
 
 contextBridge.exposeInMainWorld('dropbeam', {
+  platform: process.platform,
   selectFiles: () => ipcRenderer.invoke('files:select'),
   addDroppedFiles: (files: File[]) =>
     ipcRenderer.invoke(

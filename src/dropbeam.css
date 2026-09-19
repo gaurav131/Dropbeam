@@ -12,6 +12,7 @@
 
 .app-shell { position: relative; min-height: 100vh; background: var(--mist); }
 .titlebar { position: relative; z-index: 2; height: 58px; padding: 0 24px 0 82px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(23, 60, 53, 0.12); background: rgba(247, 249, 244, 0.88); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); -webkit-app-region: drag; }
+.app-shell:not([data-platform="darwin"]) .titlebar { padding-left: 24px; }
 .brand, .network-status { display: flex; align-items: center; }
 .brand { gap: 10px; color: var(--forest); font-size: 14px; font-weight: 700; }
 .brand-mark { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: var(--acid); background: var(--forest); }

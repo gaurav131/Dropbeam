@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { request } from 'node:http'
 import { createConnection, type Socket } from 'node:net'
-import { tmpdir } from 'node:os'
+import { tmpdir, type NetworkInterfaceInfo } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
+  getLanAddress,
   startShareServer,
   type SharedFileRecord,
   type ShareServer,
@@ -68,6 +69,48 @@ async function startPartialUpload(
   )
   return socket
 }
+
+test('selects physical LAN interfaces across macOS and Windows', () => {
+  const ipv4 = (address: string, internal = false): NetworkInterfaceInfo => ({
+    address,
+    family: 'IPv4',
+    internal,
+    netmask: '255.255.255.0',
+    mac: '00:00:00:00:00:00',
+    cidr: null,
+  })
+  assert.equal(getLanAddress({
+    'vEthernet (WSL)': [ipv4('172.20.0.1')],
+    'VMware Network Adapter VMnet8': [ipv4('192.168.100.1')],
+    Tailscale: [ipv4('100.64.0.1')],
+    'Wi-Fi': [ipv4('192.168.1.5')],
+  }), '192.168.1.5')
+  assert.equal(getLanAddress({
+    'Wi-Fi': [ipv4('169.254.1.2')],
+    Ethernet: [ipv4('192.168.1.6')],
+  }), '192.168.1.6')
+  assert.equal(getLanAddress({
+    'vEthernet (Default Switch)': [ipv4('172.22.0.1')],
+    'vEthernet (WSL (Hyper-V firewall))': [ipv4('172.20.0.1')],
+    'vEthernet (External Switch)': [ipv4('192.168.1.10')],
+  }), '192.168.1.10')
+  assert.equal(getLanAddress({
+    'vEthernet (External Switch)': [ipv4('192.168.1.10')],
+    'Wi-Fi': [ipv4('192.168.1.11')],
+  }), '192.168.1.11')
+  assert.equal(getLanAddress({
+    'vEthernet (Default Switch)': [ipv4('172.22.0.1')],
+    'vEthernet (WSL)': [ipv4('172.20.0.1')],
+  }), '127.0.0.1')
+  assert.equal(getLanAddress({
+    utun0: [ipv4('10.0.0.1')],
+    en1: [ipv4('192.168.1.7')],
+    en0: [ipv4('192.168.1.8')],
+  }), '192.168.1.8')
+  assert.equal(getLanAddress({ 'Localized adapter': [ipv4('192.168.1.9')] }), '192.168.1.9')
+  assert.equal(getLanAddress({ lo: [ipv4('127.0.0.1', true)] }), '127.0.0.1')
+  assert.equal(getLanAddress({}), '127.0.0.1')
+})
 
 test('serves pages and complete, partial, and HEAD downloads', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dropbeam-'))
@@ -148,14 +191,14 @@ test('accepts uploads, sanitizes names, and preserves existing files', async () 
   await writeFile(join(directory, 'notes.txt'), 'existing')
   const server = await startShareServer(() => [], {
     uploadDirectory: directory,
-    onUpload: (file) => received.push(file.name),
+    onUpload: (file) => { received.push(file.name) },
   })
 
   try {
     const baseUrl = loopbackUrl(server)
     const pageResponse = await fetch(baseUrl)
     const pageBody = await pageResponse.text()
-    assert.match(pageBody, /Send files to this Mac/)
+    assert.match(pageBody, /Send files to this computer/)
     assert.match(pageBody, /id="photo-input" type="file" accept="image\/\*" multiple/)
     assert.doesNotMatch(pageBody, /capture=/)
     assert.match(pageResponse.headers.get('content-security-policy') ?? '', /connect-src 'self'/)
@@ -180,6 +223,48 @@ test('accepts uploads, sanitizes names, and preserves existing files', async () 
     const missingName = await fetch(`${baseUrl}/upload`, { method: 'POST', body: 'nope' })
     assert.equal(missingName.status, 400)
     assert.deepEqual((await readdir(directory)).sort(), ['..-notes.txt', 'notes (1).txt', 'notes.txt'])
+  } finally {
+    await server.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('saves uploads with Windows-safe names on every platform', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dropbeam-upload-names-'))
+  const server = await startShareServer(() => [], { uploadDirectory: directory })
+
+  try {
+    const baseUrl = loopbackUrl(server)
+    const cases = [
+      ['CON', '_CON'],
+      ['nul.txt', '_nul.txt'],
+      ['COM1.log', '_COM1.log'],
+      ['LPT9.txt', '_LPT9.txt'],
+      ['COM\u00b9.txt', '_COM\u00b9.txt'],
+      ['CONIN$', '_CONIN$'],
+      ['AUX .txt', '_AUX .txt'],
+      ['photo.jpg:stream', 'photo.jpg-stream'],
+      ['a<b>c"d|e?f*.txt', 'a-b-c-d-e-f-.txt'],
+      ['trailing.txt. ', 'trailing.txt'],
+      ['folder\\photo.jpg', 'folder-photo.jpg'],
+      ['a'.repeat(199) + '.txt', 'a'.repeat(199)],
+    ]
+    for (const [requestedName, savedName] of cases) {
+      const response = await fetch(`${baseUrl}/upload?name=${encodeURIComponent(requestedName)}`, {
+        method: 'POST',
+        body: 'portable',
+      })
+      assert.equal(response.status, 201, requestedName)
+      assert.deepEqual(await response.json(), { name: savedName, size: 8 })
+      assert.equal(await readFile(join(directory, savedName), 'utf8'), 'portable')
+    }
+    for (const invalidName of ['.', '..', '... ', '\u0000']) {
+      const response = await fetch(`${baseUrl}/upload?name=${encodeURIComponent(invalidName)}`, {
+        method: 'POST',
+        body: 'invalid',
+      })
+      assert.equal(response.status, 400, invalidName)
+    }
   } finally {
     await server.close()
     await rm(directory, { recursive: true, force: true })
@@ -303,7 +388,7 @@ test('limits concurrent uploads and removes files from aborted requests', async 
 test('serves zero-byte files and safely renders unusual names', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dropbeam-'))
   const name = 'empty <report> 🎉.txt'
-  const filePath = join(directory, name)
+  const filePath = join(directory, 'empty.txt')
   const id = '22222222-2222-4222-8222-222222222222'
   await writeFile(filePath, '')
   const record = await createRecord(filePath, {
@@ -398,6 +483,7 @@ test('rejects malformed request targets without terminating the server', async (
 test('refuses a selected path that is replaced by another file or symlink', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dropbeam-identity-'))
   const filePath = join(directory, 'shared.txt')
+  const originalPath = join(directory, 'original.txt')
   const replacementPath = join(directory, 'replacement.txt')
   const secretPath = join(directory, 'secret.txt')
   const id = '44444444-4444-4444-8444-444444444444'
@@ -415,12 +501,16 @@ test('refuses a selected path that is replaced by another file or symlink', asyn
   const server = await startShareServer(() => [record])
 
   try {
-    await rm(filePath)
-    await writeFile(filePath, 'different inode')
+    await rename(filePath, originalPath)
+    await rename(replacementPath, filePath)
     assert.equal((await fetch(`${loopbackUrl(server)}/download/${id}`)).status, 404)
 
     await rm(filePath)
     await symlink(secretPath, filePath)
+    assert.equal((await fetch(`${loopbackUrl(server)}/download/${id}`)).status, 404)
+
+    await rm(filePath)
+    await symlink(originalPath, filePath)
     assert.equal((await fetch(`${loopbackUrl(server)}/download/${id}`)).status, 404)
   } finally {
     await server.close()

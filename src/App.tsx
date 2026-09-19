@@ -207,6 +207,7 @@ function App() {
   return (
     <div
       className={`app-shell${isDragging ? ' is-dragging' : ''}`}
+      data-platform={window.dropbeam.platform}
       onDragEnter={(event) => {
         event.preventDefault()
         setIsDragging(true)
@@ -251,7 +252,7 @@ function App() {
           <button className="drop-zone" type="button" onClick={addSelectedFiles} disabled={isAdding} aria-busy={isAdding}>
             <span className="drop-icon"><Upload aria-hidden="true" /></span>
             <span className="drop-title">{isDragging ? 'Release to add' : isAdding ? 'Adding files...' : 'Drop files here'}</span>
-            <span className="drop-meta">or choose from your Mac</span>
+            <span className="drop-meta">or choose from this computer</span>
             <span className="choose-action"><Plus aria-hidden="true" /> Choose files</span>
           </button>
 
@@ -293,7 +294,7 @@ function App() {
             <div className="received-heading">
               <div>
                 <span className="eyebrow">Saved to Downloads/Dropbeam</span>
-                <h2 id="received-title">Received on this Mac</h2>
+                <h2 id="received-title">Received files</h2>
               </div>
               <div className="received-actions">
                 <button className="text-button" type="button" onClick={toggleReceiving}>
@@ -323,8 +324,8 @@ function App() {
                     <button
                       className="icon-button"
                       type="button"
-                      title={`Show ${file.name} in Finder`}
-                      aria-label={`Show ${file.name} in Finder`}
+                      title={`Show ${file.name} in folder`}
+                      aria-label={`Show ${file.name} in folder`}
                       onClick={() => void revealReceivedFile(file.id)}
                     >
                       <FolderOpen aria-hidden="true" />

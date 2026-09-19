@@ -50,8 +50,9 @@ async function createWindow(): Promise<BrowserWindow> {
     minHeight: 640,
     show: false,
     backgroundColor: '#f4f6f1',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 18, y: 18 },
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 18, y: 18 } } : {}),
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
@@ -79,7 +80,7 @@ async function runPackagedSmokeTest(
   server: ShareServer,
 ): Promise<void> {
   const rendererReady: unknown = await window.webContents.executeJavaScript(
-    "document.title === 'Dropbeam' && typeof window.dropbeam?.getState === 'function'",
+    "document.title === 'Dropbeam' && typeof window.dropbeam?.getState === 'function' && typeof window.dropbeam?.platform === 'string'",
   )
   if (rendererReady !== true) throw new Error('Renderer or preload bridge did not initialize.')
 
@@ -99,6 +100,7 @@ async function runPackagedSmokeTest(
 }
 
 void app.whenReady().then(async () => {
+  if (process.platform === 'win32') app.setAppUserModelId('com.dropbeam.app')
   shareServer = await startShareServer(() => shareSession?.getRecords() ?? [], {
     uploadDirectory: join(app.getPath('downloads'), 'Dropbeam'),
     isUploadEnabled: () => shareSession?.isReceivingEnabled() ?? false,

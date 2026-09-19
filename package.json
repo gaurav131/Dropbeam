@@ -2,8 +2,8 @@
   "name": "dropbeam",
   "productName": "Dropbeam",
   "private": true,
-  "version": "0.2.0",
-  "description": "Bidirectional local network file sharing for macOS with no cloud upload.",
+  "version": "0.3.0",
+  "description": "Bidirectional local network file sharing for macOS and Windows with no cloud upload.",
   "author": "Dropbeam",
   "license": "MIT",
   "engines": {
@@ -15,10 +15,11 @@
     "dev": "electron-vite dev",
     "build": "tsc -b && electron-vite build",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node --experimental-strip-types --test",
     "test:package": "node scripts/smoke-packaged.mjs",
     "preview": "electron-vite preview",
     "package:mac": "npm run build && electron-builder --mac --universal --publish never",
+    "package:win": "npm run build && electron-builder --win --x64 --publish never",
     "verify:release": "node scripts/verify-macos-release.mjs"
   },
   "build": {
@@ -28,11 +29,28 @@
     "directories": {
       "output": "release"
     },
+    "toolsets": {
+      "nsis": "1.2.1"
+    },
     "afterPack": "./scripts/after-pack.cjs",
     "files": [
       "out/**/*",
       "package.json"
     ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "${productName}-${version}-windows-${arch}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
     "mac": {
       "category": "public.app-category.utilities",
       "hardenedRuntime": true,

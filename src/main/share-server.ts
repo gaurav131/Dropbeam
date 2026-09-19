@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
-import { mkdir, open, rm, statfs } from 'node:fs/promises'
+import { lstat, mkdir, open, rm, statfs } from 'node:fs/promises'
 import { createServer, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { extname, join, parse } from 'node:path'
@@ -58,9 +58,8 @@ const mimeTypes: Record<string, string> = {
   '.zip': 'application/zip',
 }
 
-function getLanAddress(): string {
-  const interfaces = networkInterfaces()
-  const preferredNames = ['en0', 'en1']
+export function getLanAddress(interfaces = networkInterfaces()): string {
+  const preferredNames = ['en0', 'en1', 'wi-fi', 'ethernet']
   const candidates = Object.entries(interfaces)
     .flatMap(([name, addresses]) =>
       (addresses ?? []).map((address) => ({ name, address })),
@@ -69,12 +68,16 @@ function getLanAddress(): string {
       ({ name, address }) =>
         address.family === 'IPv4' &&
         !address.internal &&
-        !/^(utun|awdl|llw|bridge|vbox|docker)/.test(name),
+        !/^(utun|awdl|llw|bridge|vbox|docker|vmware|virtualbox|tailscale|tun|tap)/i.test(name) &&
+        !/^vethernet \((wsl|default switch)/i.test(name),
     )
 
   candidates.sort((left, right) => {
-    const leftIndex = preferredNames.indexOf(left.name)
-    const rightIndex = preferredNames.indexOf(right.name)
+    const linkLocalDifference = Number(left.address.address.startsWith('169.254.')) -
+      Number(right.address.address.startsWith('169.254.'))
+    if (linkLocalDifference !== 0) return linkLocalDifference
+    const leftIndex = preferredNames.indexOf(left.name.toLowerCase())
+    const rightIndex = preferredNames.indexOf(right.name.toLowerCase())
     return (leftIndex < 0 ? 99 : leftIndex) - (rightIndex < 0 ? 99 : rightIndex)
   })
 
@@ -134,7 +137,7 @@ function renderDownloadPage(
 
   const uploadPanel = uploadsEnabled
     ? `<section class="upload-panel">
-      <div><h2>Send files to this Mac</h2><p>Choose files from this device. They save directly to the Mac.</p></div>
+      <div><h2>Send files to this computer</h2><p>Choose files from this device. They save directly to the computer.</p></div>
       <div class="upload-actions">
         <label class="upload-action photo-action" for="photo-input">
           <span>Choose photos</span>
@@ -238,7 +241,7 @@ function renderDownloadPage(
   <header><div class="wrap">
     <div class="brand"><span class="brand-mark">DB</span> Dropbeam</div>
     <h1>Share files nearby.</h1>
-    <p>Download from this Mac or send files back to it.</p>
+    <p>Download from this computer or send files back to it.</p>
   </div></header>
   <main>
     <div class="summary" role="region" aria-label="File summary"><span>${files.length} ${files.length === 1 ? 'file' : 'files'}</span><span>${formatBytes(totalSize)}</span></div>
@@ -258,15 +261,19 @@ function sanitizeUploadName(value: string): string | undefined {
       return code >= 32 && code !== 127
     })
     .join('')
-  const cleaned = withoutControls
-    .replace(/[\\/]/g, '-')
+  let cleaned = withoutControls
+    .replace(/[<>:"/\\|?*]/g, '-')
     .trim()
+  if (/^(con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3]|conin\$|conout\$)(?:[ .]|$)/i.test(cleaned)) {
+    cleaned = `_${cleaned}`
+  }
   let name = ''
   for (const character of cleaned) {
     if (Buffer.byteLength(name + character) > 200) break
     name += character
   }
-  return name && name !== '.' && name !== '..' ? name : undefined
+  name = name.replace(/[ .]+$/, '')
+  return name || undefined
 }
 
 async function createUploadTarget(
@@ -336,7 +343,7 @@ export async function startShareServer(
     if (method === 'POST' && requestUrl.pathname === `${pagePath}/upload` && options.uploadDirectory) {
       if (!uploadsEnabled) {
         sendHeaders(response, 403, { 'Content-Type': 'text/plain; charset=utf-8' })
-        response.end('Receiving is paused on this Mac.')
+        response.end('Receiving is paused on this computer.')
         return
       }
 
@@ -443,7 +450,13 @@ export async function startShareServer(
     if ((method === 'GET' || method === 'HEAD') && record) {
       let fileHandle
       try {
-        fileHandle = await open(record.path, constants.O_RDONLY | constants.O_NOFOLLOW)
+        const pathStat = await lstat(record.path)
+        if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
+          sendHeaders(response, 404, { 'Content-Type': 'text/plain; charset=utf-8' })
+          response.end('File not found')
+          return
+        }
+        fileHandle = await open(record.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
         const fileStat = await fileHandle.stat()
         if (
           !fileStat.isFile() ||

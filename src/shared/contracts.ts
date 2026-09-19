@@ -23,6 +23,7 @@ export type ShareState = {
 }
 
 export type DropbeamApi = {
+  readonly platform: string
   selectFiles: () => Promise<ShareState>
   addDroppedFiles: (files: File[]) => Promise<ShareState>
   removeFile: (id: string) => Promise<ShareState>

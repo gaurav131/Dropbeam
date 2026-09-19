@@ -3,9 +3,13 @@ import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
 const appPath = resolve(
-  process.argv[2] ?? join('release', 'mac-universal', 'Dropbeam.app'),
+  process.argv[2] ?? (process.platform === 'win32'
+    ? join('release', 'win-unpacked')
+    : join('release', 'mac-universal', 'Dropbeam.app')),
 )
-const executable = join(appPath, 'Contents', 'MacOS', 'Dropbeam')
+const executable = process.platform === 'win32'
+  ? join(appPath, 'Dropbeam.exe')
+  : join(appPath, 'Contents', 'MacOS', 'Dropbeam')
 await access(executable)
 
 const child = spawn(executable, ['--smoke-test'], {
@@ -23,7 +27,7 @@ child.stderr.on('data', (chunk) => { stderr += chunk })
 const timeout = setTimeout(() => child.kill('SIGKILL'), 30_000)
 const { code, signal } = await new Promise((resolveExit, reject) => {
   child.once('error', reject)
-  child.once('exit', (exitCode, exitSignal) => {
+  child.once('close', (exitCode, exitSignal) => {
     resolveExit({ code: exitCode, signal: exitSignal })
   })
 })
